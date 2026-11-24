@@ -5,7 +5,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from calculations import average_prices_by_month, monthly_consumption, ytd_overview
+from calculations import (
+    ENERGY_TAX_EX_VAT,
+    annual_energy_totals,
+    average_prices_by_month,
+    monthly_consumption,
+    ytd_overview,
+)
 from database import backfill_invoice_titles, connect, scan_and_import
 
 
@@ -150,11 +156,42 @@ if price_rows:
     )
     st.caption(
         "Gebaseerd op werkelijke regels en bedragen inclusief btw. "
-        "Het jaargemiddelde is gewogen naar de werkelijke hoeveelheid gas, "
-        "afgenomen elektriciteit en teruglevering."
+        "De energiebelasting is toegevoegd volgens de tarieven van het geselecteerde jaar; "
+        "bij teruglevering alleen in 2026. Het jaargemiddelde is gewogen naar de werkelijke "
+        "hoeveelheid gas, afgenomen elektriciteit en teruglevering."
+    )
+    totals = annual_energy_totals(connection, int(year))
+    totals_frame = pd.DataFrame([{
+        "Periode": "Jaartotalen",
+        "Gas (€ incl. btw)": totals["gas_total_inc_vat"],
+        "Elektriciteit levering (€ incl. btw)": totals["electricity_total_inc_vat"],
+        "Teruglevering (€ incl. btw)": totals["feed_in_total_inc_vat"],
+    }])
+    for column in totals_frame.columns[1:]:
+        totals_frame[column] = totals_frame[column].map(
+            lambda value: float(value) if value is not None else None
+        )
+    st.dataframe(
+        totals_frame,
+        hide_index=True,
+        width="stretch",
+        alt="Totale gas- en elektriciteitskosten en terugleveropbrengst voor het jaar",
+        column_config={
+            column: st.column_config.NumberColumn(format="€ %.2f")
+            for column in totals_frame.columns[1:]
+        },
+    )
+    st.caption(
+        "Jaartotalen zijn gebaseerd op werkelijk verbruik en teruglevering, inclusief "
+        "energiebelasting en btw. Teruglevering wordt als positieve opbrengst getoond."
     )
 else:
     st.info("Geen werkelijke energieprijzen gevonden voor dit jaar.")
+if int(year) not in ENERGY_TAX_EX_VAT:
+    st.warning(
+        "Energiebelastingtarieven zijn alleen bekend voor 2026 en 2027. "
+        "De getoonde prijzen bevatten voor dit jaar geen energiebelasting."
+    )
 
 st.subheader("Facturen")
 invoice_rows = connection.execute(
