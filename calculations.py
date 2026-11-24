@@ -32,6 +32,16 @@ def is_bonus_line(category: str, description: str) -> bool:
     )
 
 
+def bonus_amount(category: str, amount: Decimal) -> Decimal:
+    """Return a bonus as a cost reduction (electricity) or extra revenue (feed-in).
+
+    Bonuses are always in the household's favour, regardless of the sign the
+    parser extracted from the PDF. Electricity costs are positive, so the slim
+    laden bonus is negative; feed-in revenue is returned as a positive amount.
+    """
+    return -abs(amount) if category == "electricity" else abs(amount)
+
+
 def decimal_sum(rows: list[sqlite3.Row], column: str) -> Decimal:
     total = Decimal("0")
     for row in rows:
@@ -84,7 +94,7 @@ def monthly_consumption(connection: sqlite3.Connection, year: int) -> list[dict]
     end = f"{year}-12-31"
     rows = connection.execute(
         """
-        SELECT category, line_type, quantity, unit, unit_price_ex_vat,
+        SELECT category, line_type, description, quantity, unit, unit_price_ex_vat,
                amount_ex_vat, amount_inc_vat, period_start, period_end
         FROM invoice_lines
         WHERE (
@@ -134,9 +144,10 @@ def monthly_consumption(connection: sqlite3.Connection, year: int) -> list[dict]
                 item["fixed_cost_inc_vat"] += amount
             elif is_bonus_line(row["category"], row["description"]):
                 if row["category"] == "electricity":
-                    item["electricity_cost_inc_vat"] += amount
+                    item["electricity_cost_inc_vat"] += bonus_amount("electricity", amount)
                 else:
-                    item["feed_in_revenue_inc_vat"] += amount
+                    # Feed-in revenue is stored with a negative sign in this overview.
+                    item["feed_in_revenue_inc_vat"] -= bonus_amount("feed_in", amount)
         elif row["category"] == "electricity":
             item["electricity_kwh"] += quantity
             item["electricity_cost_inc_vat"] += amount
@@ -190,7 +201,9 @@ def average_prices_by_month(connection: sqlite3.Connection, year: int) -> list[d
             continue
 
         amount = Decimal(row["amount_inc_vat"])
-        if row["category"] == "feed_in":
+        if is_bonus:
+            amount = bonus_amount(row["category"], amount)
+        elif row["category"] == "feed_in":
             amount = abs(amount)
 
         key = price_keys[row["category"]]
@@ -262,7 +275,10 @@ def annual_energy_totals(connection: sqlite3.Connection, year: int) -> dict[str,
         if not is_bonus:
             category_total["quantity"] += abs(Decimal(row["quantity"]))
         amount = Decimal(row["amount_inc_vat"])
-        category_total["amount"] += abs(amount) if row["category"] == "feed_in" else amount
+        if is_bonus:
+            category_total["amount"] += bonus_amount(row["category"], amount)
+        else:
+            category_total["amount"] += abs(amount) if row["category"] == "feed_in" else amount
 
     tax_rates = ENERGY_TAX_EX_VAT.get(year, {})
     result: dict[str, Decimal | None] = {}

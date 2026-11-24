@@ -148,3 +148,49 @@ def test_monthly_prices_and_usage_weighted_yearly_averages(tmp_path):
     assert totals_2027["electricity_total_inc_vat"] == Decimal("30.00") + Decimal("0.088") * Decimal("1.21") * Decimal("100")
     assert totals_2027["gas_total_inc_vat"] == Decimal("8.00") + Decimal("0.616") * Decimal("1.21") * Decimal("10")
     assert totals_2027["feed_in_total_inc_vat"] == Decimal("10.00")
+
+
+def test_bonuses_lower_electricity_cost_and_raise_feed_in_revenue(tmp_path):
+    connection = connect(tmp_path / "test.db")
+    cursor = connection.execute(
+        """
+        INSERT INTO invoices (
+            supplier, invoice_number, invoice_date, total_amount_inc_vat,
+            source_file, source_hash, imported_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("Frank Energie", "3", "2026-07-11", "0", "synthetic.pdf", "bonus", "2026-07-11"),
+    )
+    invoice_id = cursor.lastrowid
+    connection.executemany(
+        """
+        INSERT INTO invoice_lines (
+            invoice_id, category, line_type, description, period_start,
+            period_end, quantity, unit, amount_inc_vat
+        ) VALUES (?, ?, ?, ?, '2026-06-01', '2026-06-30', ?, 'kWh', ?)
+        """,
+        [
+            (invoice_id, "electricity", "actual", "Werkelijke kosten", "100", "30.00"),
+            (invoice_id, "feed_in", "actual", "Werkelijke opbrengst", "-50", "-10.00"),
+            # Sign as extracted from the PDF may vary; bonuses always favour the household.
+            (invoice_id, "electricity", "fixed", "Bonusvergoeding slim laden", "40", "5.00"),
+            (invoice_id, "feed_in", "fixed", "Terugleverbonus slim terugleveren", "50", "-2.50"),
+        ],
+    )
+    connection.commit()
+
+    monthly = monthly_consumption(connection, 2026)
+    assert monthly[0]["electricity_kwh"] == Decimal("100")
+    assert monthly[0]["electricity_cost_inc_vat"] == Decimal("25.00")
+    assert monthly[0]["feed_in_kwh"] == Decimal("50")
+    assert monthly[0]["feed_in_revenue_inc_vat"] == Decimal("-12.50")
+
+    tax = Decimal("0.092") * Decimal("1.21")
+    june, annual = average_prices_by_month(connection, 2026)
+    assert june["electricity_price_inc_vat"] == Decimal("0.25") + tax
+    assert june["feed_in_price_inc_vat"] == Decimal("0.25") + tax
+    assert annual["electricity_price_inc_vat"] == Decimal("0.25") + tax
+
+    totals = annual_energy_totals(connection, 2026)
+    assert totals["electricity_total_inc_vat"] == Decimal("25.00") + tax * Decimal("100")
+    assert totals["feed_in_total_inc_vat"] == Decimal("12.50") + tax * Decimal("50")

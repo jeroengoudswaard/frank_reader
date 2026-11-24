@@ -203,48 +203,53 @@ invoice_rows = connection.execute(
     """
 ).fetchall()
 if invoice_rows:
-    column_widths = [0.35, 0.9, 0.9, 0.9, 1.0, 1.3, 1.2, 0.7, 1.3]
-    headers = [
-        "Nr.", "Factuurnummer", "Factuurdatum", "Vervaldatum",
-        "Bedrag incl. btw", "Omschrijving", "Bestand", "Status",
-        "Importmelding",
-    ]
-    for column, label in zip(st.columns(column_widths), headers):
-        column.markdown(f"**{label}**")
-    st.divider()
-
-    for number, row in enumerate(invoice_rows, start=1):
-        columns = st.columns(column_widths, vertical_alignment="center")
-        values = (
-            number,
-            row["invoice_number"],
-            row["invoice_date"],
-            row["due_date"] or "—",
-            row["total_amount_inc_vat"],
-            row["invoice_title"] or "—",
-        )
-        for column, value in zip(columns, values):
-            column.write(value)
-
+    invoice_frame = pd.DataFrame([
+        {
+            "Nr.": number,
+            "Factuurnummer": row["invoice_number"],
+            "Factuurdatum": row["invoice_date"],
+            "Vervaldatum": row["due_date"] or "—",
+            "Bedrag incl. btw": float(row["total_amount_inc_vat"]),
+            "Omschrijving": row["invoice_title"] or "—",
+            "Bestand": row["source_file"],
+            "Status": row["import_status"],
+            "Importmelding": row["import_warning"] or "—",
+        }
+        for number, row in enumerate(invoice_rows, start=1)
+    ])
+    selection = st.dataframe(
+        invoice_frame,
+        hide_index=True,
+        width="stretch",
+        on_select="rerun",
+        selection_mode="single-row",
+        key="invoice_table",
+        alt="Geïmporteerde facturen",
+        column_config={
+            "Nr.": st.column_config.NumberColumn(width="small"),
+            "Bedrag incl. btw": st.column_config.NumberColumn(format="€ %.2f"),
+        },
+    )
+    selected_rows = selection.selection.rows
+    if selected_rows:
+        row = invoice_rows[selected_rows[0]]
         source_path = next(
             (folder / row["source_file"] for folder in folders if (folder / row["source_file"]).is_file()),
             None,
         )
         if source_path:
-            columns[6].download_button(
-                row["source_file"],
+            st.download_button(
+                f"Download {row['source_file']}",
                 data=source_path.read_bytes(),
                 file_name=row["source_file"],
                 mime="application/pdf",
                 key=f"download_invoice_{row['id']}",
-                type="tertiary",
-                width="stretch",
+                icon=":material/download:",
                 on_click="ignore",
             )
         else:
-            columns[6].write(row["source_file"])
-        columns[7].write(row["import_status"])
-        columns[8].write(row["import_warning"] or "—")
-        st.divider()
+            st.caption(f"Bestand {row['source_file']} niet gevonden in de invoices- of pdfs-map.")
+    else:
+        st.caption("Selecteer een factuur om de pdf te downloaden.")
 else:
     st.caption("Nog geen facturen geïmporteerd.")
