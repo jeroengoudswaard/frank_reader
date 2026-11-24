@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.py[cod]
+energy.db
+# Private invoice documents
+*.pdf
+*.PDF
+.streamlit/secrets.toml
+.pytest_cache/
